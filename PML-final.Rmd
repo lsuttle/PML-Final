@@ -1,0 +1,128 @@
+---
+title: "Practical Machine Learning Final Project"
+author: "Laura Suttle"
+date: "Friday, August 22, 2014"
+output: html_document
+---
+
+### Introduction
+
+This report outlines an exercise in using machine learning to classify types of physical motion from recordings of human activity. Through the use of random forests classification, a model was developed that was able to not only perform well in classify the data it was trained on, but also out of sample data from a validation set that was not used in model training. While difficult to interpret due to its "black box" nature, this result affirms the ability of random forests to create highly accurate classification models. 
+
+### Data Importing and Segmentation
+
+The dataset used for this exercise can be found at: http://groupware.les.inf.puc-rio.br/static/WLE/WearableComputing_weight_lifting_exercises_biceps_curl_variations.csv
+
+The data comes from a study where six participants were recorded while performing five variations of a basic bicep curl with a light barbbell weight. The data was recorded using sensors attached to the participants' belt, arms, and forearms as well as on the barbbells themselves.
+
+Before created a model, the data was first loaded. Since the test data was already separated as part of this exercise, a testing set was not split from the imported data. However, a validation set was created that consisted of 30% of the data, leaving the remaining 70% to create the model. From this point, all work was only done on the separate testing set. 
+
+```{r}
+data <- read.csv("pml-training.csv")
+set.seed(1234)
+library(caret)
+
+inTrain <- createDataPartition(y=data$classe, p=0.7, list=FALSE)
+training <- data[inTrain,] 
+validation <- data[-inTrain,]
+```
+
+### Data Cleaning
+
+Before creating the model, an effort was made to clean the data. The first step was removing any variables that were not relevant to predicting the type of motion. For example, there were variables that included timestamps and usernames, none of which were relevant for the analysis and were therefore removed, removing seven variables from the dataset (153 remaining).
+
+```{r}
+#clean up training set
+#remove non measure data
+nonMeasure <-  c('X', 'new_window', 'num_window', 'user_name', 'raw_timestamp_part_1', 'raw_timestamp_part_2', 'cvtd_timestamp')
+trainingTrim1 <- training[, -which(names(training) %in% nonMeasure)]
+```
+
+Next, variables were checked to make sure that each of them had greater than zero variance. This was due to the fact that variables without any variance statistically are unable to then account for any variance themselves in our dependent measure. The functio nearZeroVar was used from the caret package to identify the relevant variables. This removed 59 variables from the dataset (94 remaining).
+
+```{r}
+#remove non predictive data
+noVar <- nearZeroVar(trainingTrim1, saveMetrics = TRUE)
+trainingTrim2 <- trainingTrim1[,noVar[, 'nzv'] == FALSE]
+```
+
+Next, variables were checked to make sure they did not have many missing values. Looking at the table generated below, it became apparently there were two types of variables: some that have almost entirely missing values and others that had no missing values. Upon making this discover, the variables with mostly missing values were removed from the dataset (53 remaining).
+
+```{r}
+table(colSums(is.na(trainingTrim2)))
+trainingTrim3 <- trainingTrim2[ , colSums(is.na(trainingTrim2)) == 0]
+```
+
+Finally, a correlation matrix was created in order to make sure that none of the variables were highly correlated with each other. Colinear variables can cause issues with many modeling techniques. Using the caret function findCorrelation, a list of variables with a correlation coefficient higher that .8 was generated. From this, twelve variables were removed.
+
+```{r}
+corMat <- cor(na.omit(trainingTrim3[sapply(trainingTrim3, is.numeric)]))
+colinear <- findCorrelation(corMat, cutoff = .80)
+trainingFinal <- trainingTrim3[,-colinear]
+```
+
+At the end of this cleaning process, 41 variables remained, including the variable that labeled the type of motion that was to be categorized. 
+
+### Model Fit
+
+In selecting a model for this exercise, the focus was on finding a model that could provide accurate predictions on a categorical outcome, since the dependent variable in this dataset consists of a factor with five outcomes. While there were many options, random forests have been shown to provide very accurate predictions. For that reason alone, this was the model that was used. 
+
+Random forests creates many tree models of a dataset, then combines them all using importance weighting to produce more accurate results than any single model created. The more models that are run, the better the results tend to be. However, in order to shorten the time to complete the modeling, only 100 models were ran to create the final random forest model. 
+
+
+```{r}
+library(randomForest)
+
+#rf model
+
+rf <- randomForest(classe~.,data=trainingFinal, ntree=100, importance=TRUE, proximity= TRUE)
+rf
+
+```
+
+Looking at both the OOB error rate estimate as well as the error rate for each predicted class, the model performed very well at >99% accuracy in most cases. 
+
+In order to better understand how this model does so well, we can look at what variables were weighted more heavily in the final model. This graph shows two measures of importance to model fit. The higher on the lists that a variable appears, the more important it was in classification. 
+
+
+```{r}
+varImpPlot(rf,)
+```
+
+Looking at this chart, it appears that the yaw of the belt was the most important variable used in classification, followed by measures from the barbell as well as the forearm. 
+
+We can also look more at how the accuracy of the model for each class progressed as trees were added to it using the plot below. 
+
+```{r}
+plot(rf, log="y")
+legend("top", colnames(rf$err.rate),col=1:4,cex=0.8, pch = 18)
+```
+
+These numbers reflect the error rates provided in the model summary itself. Of note is how the model better performs on classes A and E, a difference that appears early and remains consistent. 
+
+Combining the facts of these two charts, we might wonder what the relationship between the most important variable (belt yaw) and the best predicted classes (A and E) are. To look at this, we can plot the partials for each class for the yaw_belt variable specifically. The interpretation of this chart is fairly straight forward: the x-axis represents different values for the belt yaw variables. A higher line at a particular value of yaw belt means that that the model more favors that particular class based on that particular input. 
+
+
+```{r}
+par(mfrow = c(2,3))
+partialPlot(rf, trainingFinal, yaw_belt, "A", main = "Class A")
+partialPlot(rf, trainingFinal, yaw_belt, "B", main = "Class B")
+partialPlot(rf, trainingFinal, yaw_belt, "C", main = "Class C")
+partialPlot(rf, trainingFinal, yaw_belt, "D", main = "Class D")
+partialPlot(rf, trainingFinal, yaw_belt, "E", main = "Class E")
+```
+
+The plots for classes A - D are not particular illuminating, but looking at class E, we can see that high values of yaw belt cause the most to put a high weight towards a classifying the movement as class E. In reading the descriptions of the movements, it becomes clear why: class E involves participants moving their hips forward while completing their bicep curl. This movement is captured primarily through the belt sensor, making this variable a strong predictors towards class E. 
+
+While random forests are usually considered black box models that are difficult to interpret, the previous showed that, in looking at various measures provided by the model, we can glean at least something about the inner workings on the model. This is only a small sample of what could be considered. 
+
+### Measure Out of Sample Fit
+
+In order to estimate out of sample fit, the model was ran on the separate validation data that was not used in training. The outcome can be seen below:
+
+```{r}
+output2 <- predict(rf, validation)
+confusionMatrix(validation$classe, output2)
+```
+
+The model performs very well on this separate data set, with an accuracy of 99.5%. This incredible accuracy reassures us that the model was not overfitted to the training data but is an overall good model for predicting the type of motion based on the variables provided to it. 
